@@ -12,6 +12,13 @@ export type Goal = {
   deadline: string;
   progress: number;
   color: string;
+  hoursPerWeek: number;
+  durationWeeks: number;
+  loggedHours: number;
+  createdAt: string;
+  currentStreak?: number;
+  bestStreak?: number;
+  lastLoggedDate?: string | null;
 };
 
 export type Insight = {
@@ -24,6 +31,8 @@ export type GoalForm = {
   title: string;
   category: GoalCategory;
   priority: GoalPriority;
-  deadline: string;
-  time: string;
+  deadline?: string;
+  time?: string;
+  hoursPerWeek: string;
+  durationWeeks: string;
 };

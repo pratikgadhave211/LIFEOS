@@ -3,3 +3,9 @@ dist
 .vscode
 .DS_Store
 *.log
+backend/.venv
+backend/.env
+backend/lifeos.db
+backend/chroma
+backend/**/__pycache__/
+backend/**/*.pyc

@@ -16,9 +16,92 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useMemo } from "react";
 import { insightColors, insights } from "./data";
-import type { InsightType } from "./types";
+import type { InsightType, Goal } from "./types";
 import { Card, SectionTitle } from "./ui";
+
+// Helper function to generate dynamic data from goalItems
+const generateDashboardData = (goalItems: Goal[]) => {
+  // Calculate category-based progress
+  const categoryProgress: Record<string, number[]> = {
+    fitness: [],
+    academics: [],
+    finance: [],
+    personal: [],
+  };
+
+  goalItems.forEach((goal) => {
+    const category = goal.category.toLowerCase() as keyof typeof categoryProgress;
+    if (categoryProgress[category]) {
+      categoryProgress[category].push(goal.progress);
+    }
+  });
+
+  const categoryAverages = {
+    fitness: Math.round(categoryProgress.fitness.reduce((a, b) => a + b, 0) / Math.max(1, categoryProgress.fitness.length)),
+    academics: Math.round(categoryProgress.academics.reduce((a, b) => a + b, 0) / Math.max(1, categoryProgress.academics.length)),
+    finance: Math.round(categoryProgress.finance.reduce((a, b) => a + b, 0) / Math.max(1, categoryProgress.finance.length)),
+    personal: Math.round(categoryProgress.personal.reduce((a, b) => a + b, 0) / Math.max(1, categoryProgress.personal.length)),
+  };
+
+  // Build a 7-day consistency curve anchored to actual category averages.
+  const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const dayFactors = [0.86, 0.9, 0.94, 0.98, 1.0, 1.03, 1.05];
+  const consistencyData = dayLabels.map((day, index) => ({
+    day,
+    fitness: Math.max(0, Math.min(100, Math.round(categoryAverages.fitness * dayFactors[index]))),
+    academics: Math.max(0, Math.min(100, Math.round(categoryAverages.academics * dayFactors[index]))),
+    finance: Math.max(0, Math.min(100, Math.round(categoryAverages.finance * dayFactors[index]))),
+    personal: Math.max(0, Math.min(100, Math.round(categoryAverages.personal * dayFactors[index]))),
+  }));
+
+  // Calculate average per category for radar
+  const radarData = [
+    { subject: "Academics", A: categoryAverages.academics },
+    { subject: "Fitness", A: categoryAverages.fitness },
+    { subject: "Finance", A: categoryAverages.finance },
+    { subject: "Personal", A: categoryAverages.personal },
+  ];
+
+  // Calculate completion ratios
+  const completed = goalItems.filter((g) => g.progress >= 100).length;
+  const inProgress = goalItems.filter((g) => g.progress > 0 && g.progress < 100).length;
+  const pending = goalItems.filter((g) => g.progress === 0).length;
+  const total = goalItems.length;
+
+  const completionData = [
+    { name: "Completed", value: total > 0 ? Math.round((completed / total) * 100) : 0, color: "#3b82f6" },
+    { name: "In Progress", value: total > 0 ? Math.round((inProgress / total) * 100) : 0, color: "#8b5cf6" },
+    { name: "Pending", value: total > 0 ? Math.round((pending / total) * 100) : 100, color: "#e2e8f0" },
+  ];
+
+  const progressData = [0.25, 0.5, 0.75, 1].map((factor, index) => {
+    const completedValue = Math.round(completed * factor);
+    const pendingValue = Math.max(0, pending + Math.round((1 - factor) * inProgress));
+    const missedValue = Math.max(0, total - completedValue - pendingValue);
+
+    return {
+      week: `W${index + 1}`,
+      completed: completedValue,
+      pending: pendingValue,
+      missed: missedValue,
+    };
+  });
+
+  return {
+    consistencyData,
+    radarData,
+    completionData,
+    progressData,
+    stats: {
+      totalGoals: total,
+      completedToday: completed,
+      consistencyScore: total > 0 ? Math.round(goalItems.reduce((sum, g) => sum + g.progress, 0) / total) : 0,
+      avgProgress: total > 0 ? Math.round(goalItems.reduce((sum, g) => sum + g.progress, 0) / total) : 0,
+    },
+  };
+};
 
 type ConsistencyData = {
   day: string;
@@ -54,55 +137,44 @@ type ScheduleLog = {
   impact: string;
 };
 
-const consistencyData: ConsistencyData[] = [
-  { day: "Mon", fitness: 80, academics: 60, finance: 45, personal: 70 },
-  { day: "Tue", fitness: 65, academics: 75, finance: 55, personal: 60 },
-  { day: "Wed", fitness: 90, academics: 80, finance: 65, personal: 55 },
-  { day: "Thu", fitness: 70, academics: 85, finance: 70, personal: 80 },
-  { day: "Fri", fitness: 85, academics: 70, finance: 60, personal: 75 },
-  { day: "Sat", fitness: 95, academics: 50, finance: 80, personal: 90 },
-  { day: "Sun", fitness: 75, academics: 65, finance: 75, personal: 85 },
-];
+function buildScheduleLogs(goalItems: Goal[]): ScheduleLog[] {
+  const activeGoals = goalItems.filter((goal) => goal.progress < 100);
 
-const radarData: RadarData[] = [
-  { subject: "Academics", A: 78 },
-  { subject: "Fitness", A: 88 },
-  { subject: "Finance", A: 62 },
-  { subject: "Personal", A: 74 },
-  { subject: "Social", A: 55 },
-];
+  if (activeGoals.length === 0) {
+    return [
+      {
+        id: 1,
+        trigger: "No active goals",
+        before: "No active goals found for this user",
+        after: "Create goals in Goals page to generate adaptive scheduling",
+        impact: "Waiting for input",
+      },
+    ];
+  }
 
-const progressData: ProgressData[] = [
-  { week: "W1", completed: 5, pending: 3, missed: 1 },
-  { week: "W2", completed: 8, pending: 2, missed: 2 },
-  { week: "W3", completed: 6, pending: 4, missed: 1 },
-  { week: "W4", completed: 10, pending: 1, missed: 0 },
-];
+  return activeGoals
+    .slice()
+    .sort((a, b) => a.progress - b.progress)
+    .slice(0, 3)
+    .map((goal, index) => {
+      const totalDays = Math.max(goal.durationWeeks * 7, 1);
+      const elapsedDays = Math.max(0, Math.floor((Date.now() - new Date(goal.createdAt).getTime()) / (24 * 60 * 60 * 1000)));
+      const remainingDays = Math.max(totalDays - elapsedDays, 1);
+      const targetHours = goal.hoursPerWeek * goal.durationWeeks;
+      const remainingHours = Math.max(targetHours - goal.loggedHours, 0);
+      const neededPerDay = remainingHours / remainingDays;
 
-const completionData: CompletionData[] = [
-  { name: "Completed", value: 62, color: "#3b82f6" },
-  { name: "In Progress", value: 25, color: "#8b5cf6" },
-  { name: "Pending", value: 13, color: "#e2e8f0" },
-];
+      return {
+        id: goal.id,
+        trigger: `${goal.category} progress at ${goal.progress}%`,
+        before: `${goal.title}\nLogged: ${goal.loggedHours.toFixed(1)}h / ${targetHours.toFixed(1)}h`,
+        after: `Allocate ${neededPerDay.toFixed(2)}h/day for next ${remainingDays} day(s)\nPriority: ${goal.priority}`,
+        impact: `${remainingHours.toFixed(1)}h remaining`,
+      };
+    });
+}
 
-const scheduleLogs: ScheduleLog[] = [
-  {
-    id: 1,
-    trigger: "Deadline conflict detected",
-    before: "6:00-7:00 AM: Budget Review\n7:00-8:00 AM: ML Study",
-    after: "6:00-7:30 AM: ML Study (Priority Boosted)\n7:30-8:30 AM: Budget Review",
-    impact: "+22% deadline safety",
-  },
-  {
-    id: 2,
-    trigger: "Consistency drop in Fitness",
-    before: "No fitness block scheduled today",
-    after: "7:00-7:45 AM: Morning Run (Auto-inserted)",
-    impact: "Streak maintained",
-  },
-];
-
-function GoalConsistencyChart() {
+function GoalConsistencyChart({ consistencyData }: { consistencyData: any[] }) {
   return (
     <Card>
       <SectionTitle sub="Past 7 days - all categories">Goal Consistency</SectionTitle>
@@ -142,7 +214,7 @@ function GoalConsistencyChart() {
   );
 }
 
-function GoalBalanceRadar() {
+function GoalBalanceRadar({ radarData }: { radarData: any[] }) {
   return (
     <Card>
       <SectionTitle sub="Balance across life areas">Goal Balance</SectionTitle>
@@ -157,11 +229,11 @@ function GoalBalanceRadar() {
   );
 }
 
-function ProgressTrendsChart() {
+function ProgressTrendsChart({ progressData }: { progressData: ProgressData[] }) {
   return (
     <Card>
       <SectionTitle sub="Weekly goal completion vs pending">Progress Trends</SectionTitle>
-      <ResponsiveContainer width="100%" height={160}>
+      <ResponsiveContainer width="100%" height={280}>
         <BarChart data={progressData} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="week" tick={{ fontSize: 10, fill: "#94a3b8" }} />
@@ -195,7 +267,7 @@ function ProgressTrendsChart() {
   );
 }
 
-function GoalCompletionChart() {
+function GoalCompletionChart({ completionData }: { completionData: any[] }) {
   return (
     <Card>
       <SectionTitle sub="This week's snapshot">Goal Completion</SectionTitle>
@@ -223,12 +295,12 @@ function GoalCompletionChart() {
   );
 }
 
-function SchedulingLog() {
+function SchedulingLog({ logs }: { logs: ScheduleLog[] }) {
   return (
-    <Card className="col-span-2">
+    <Card className="max-h-[420px] overflow-y-auto">
       <SectionTitle sub="AI-triggered adjustments to your plan">Adaptive Scheduling Log</SectionTitle>
       <div className="flex flex-col gap-3">
-        {scheduleLogs.map((log) => (
+        {logs.map((log) => (
           <div key={log.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs font-medium text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">
@@ -285,15 +357,26 @@ export function SmartInsightsCard() {
   );
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ goalItems }: { goalItems: Goal[] }) {
+  const dashboardData = useMemo(() => generateDashboardData(goalItems), [goalItems]);
+  const scheduleLogs = useMemo(() => buildScheduleLogs(goalItems), [goalItems]);
+
+  const completionRate =
+    dashboardData.stats.totalGoals > 0
+      ? Math.round((dashboardData.stats.completedToday / dashboardData.stats.totalGoals) * 100)
+      : 0;
+
+  const activeGoals = goalItems.filter((g) => g.progress < 100).length;
+  const improvingGoals = goalItems.filter((g) => g.progress > 0 && g.progress < 100).length;
+
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Active Goals", value: "12", change: "+2 this week", icon: "🎯" },
-          { label: "Completed Today", value: "4", change: "67% of daily plan", icon: "✅" },
-          { label: "Consistency Score", value: "82%", change: "+5% vs last week", icon: "📈" },
-          { label: "Schedule Adjustments", value: "3", change: "Auto-rebalanced today", icon: "🔄" },
+          { label: "Active Goals", value: activeGoals.toString(), change: `${dashboardData.stats.totalGoals} total tracked`, icon: "🎯" },
+          { label: "Completed", value: dashboardData.stats.completedToday.toString(), change: `${completionRate}% completion rate`, icon: "✅" },
+          { label: "Consistency Score", value: `${dashboardData.stats.consistencyScore}%`, change: `${improvingGoals} currently improving`, icon: "📈" },
+          { label: "Avg Progress", value: `${dashboardData.stats.avgProgress}%`, change: "Calculated from all goals", icon: "🔄" },
         ].map((s) => (
           <Card key={s.label} className="flex items-center gap-3">
             <div className="text-2xl">{s.icon}</div>
@@ -307,20 +390,19 @@ export default function DashboardPage() {
       </div>
       <div className="grid grid-cols-4 gap-4">
         <div className="col-span-2">
-          <GoalConsistencyChart />
+          <GoalConsistencyChart consistencyData={dashboardData.consistencyData} />
         </div>
-        <GoalBalanceRadar />
-        <GoalCompletionChart />
+        <GoalBalanceRadar radarData={dashboardData.radarData} />
+        <GoalCompletionChart completionData={dashboardData.completionData} />
       </div>
       <div className="grid grid-cols-4 gap-4">
         <div className="col-span-2">
-          <ProgressTrendsChart />
+          <ProgressTrendsChart progressData={dashboardData.progressData} />
         </div>
         <div className="col-span-2">
-          <SmartInsightsCard />
+          <SchedulingLog logs={scheduleLogs} />
         </div>
       </div>
-      <SchedulingLog />
     </div>
   );
 }
